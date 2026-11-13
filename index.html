@@ -106,6 +106,22 @@ label.l{display:block;font-size:13px;color:var(--mute);margin:14px 0 0;font-weig
 .toast{position:fixed;left:50%;bottom:100px;transform:translateX(-50%) translateY(20px);background:#fff;color:#000;padding:10px 16px;border-radius:99px;font-weight:600;font-size:14px;opacity:0;transition:.2s;z-index:20;pointer-events:none}
 .toast.on{opacity:1;transform:translateX(-50%)}
 .hide{display:none!important}
+
+.tabs{display:flex;gap:8px;overflow-x:auto;padding:2px 0 14px;margin:0 -16px;padding-left:16px;padding-right:16px;scrollbar-width:none;position:sticky;top:0;background:var(--bg);z-index:5;padding-top:8px}
+.tabs::-webkit-scrollbar{display:none}
+.tab{flex:none;width:58px;height:66px;border-radius:16px;background:var(--card);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;position:relative;border:2px solid transparent}
+.tab b{font-size:22px;font-weight:800;line-height:1}
+.tab small{font-size:9.5px;color:var(--mute);font-weight:600}
+.tab.on{border-color:var(--acc)}
+.tab.done{background:#1d1a10}
+.tab.done::after{content:'✓';position:absolute;top:-5px;right:-5px;width:20px;height:20px;border-radius:50%;background:var(--acc);color:var(--acc-ink);font-size:12px;font-weight:800;display:grid;place-items:center}
+.tab .dot{position:absolute;top:-5px;left:-5px;min-width:20px;height:20px;border-radius:99px;background:#ff8a3d;color:#1a0b00;font-size:11px;font-weight:800;display:grid;place-items:center;padding:0 5px}
+.rhead{display:flex;align-items:center;gap:12px;margin:4px 0 10px}
+.rhead h2{margin:0;font-size:30px;font-weight:800;flex:1;letter-spacing:-.02em}
+.rhead h2 span{font-size:14px;color:var(--mute);font-weight:600;letter-spacing:0}
+.panel{background:var(--card);border-radius:var(--r);padding:4px 14px}
+.panel .step{background:var(--card2)}
+select.field{color:var(--txt);-webkit-appearance:none;appearance:none}
 </style>
 </head>
 <body>
@@ -131,10 +147,6 @@ const DEFAULT_ITEMS = [
   {id:'pq',   name:'Rouleau PQ', short:'PQ', plural:'PQ', e:'🧻'},
   {id:'mag',  name:'Magazine / livre', short:'magazine', plural:'magazines', e:'📚'},
 ];
-const uid = () => Math.random().toString(36).slice(2,9);
-function freshState(){
-  return { items: DEFAULT_ITEMS.map(x=>({...x})), lists: [], types: defaultTypes(), updated: 0 };
-}
 function defaultTypes(){ return {
   suite:   {name:'Suite',              short:'Suite',     std:{gv:4,pv:4,tasse:4}},
   junior:  {name:'Suite junior',       short:'Suite jr',  std:{gv:4,pv:4,tasse:4}},
@@ -142,208 +154,125 @@ function defaultTypes(){ return {
   priv:    {name:'Privilège',          short:'Privilège', std:{gv:2,pv:2,tasse:2}} }; }
 const ROOM_MAP = {'1':'suite','2':'terrasse','3':'terrasse','4':'terrasse','5':'terrasse','6':'terrasse','7':'junior','8':'priv','9':'priv'};
 const typeFor = n => ROOM_MAP[String(n).trim()] || 'priv';
-function migrate(){
-  if(!S.types || !S.types.junior){
-    S.types=defaultTypes();
-    (S.lists||[]).forEach(l=>l.rooms.forEach(r=>{ r.type=typeFor(r.name); }));
-  }
-  (S.lists||[]).forEach(l=>l.rooms.forEach(r=>{ if(!S.types[r.type]) r.type=typeFor(r.name); }));
-  if(!S.v2){ S.types.junior.std={...S.types.junior.std,gv:4,pv:4,tasse:4}; S.v2=1; }
-}
-const rtype = r => S.types[r.type]||S.types.priv;
+const defaultRooms = () => ['1','2','3','4','5','6','7','8','9'].map(n=>({name:n,type:typeFor(n),needs:{},done:false,note:''}));
+function freshState(){ return { v:3, items: DEFAULT_ITEMS.map(x=>({...x})), types: defaultTypes(), rooms: defaultRooms(), day: Date.now(), updated: 0 }; }
 let S = freshState();
-let view = {screen:'home', listId:null};
+let cur = 0;           // index de la chambre affichée
 let db = null, saveTimer = null;
 
-/* ---------- Persistance (db Claude + secours local) ---------- */
-function localSave(){ try{ localStorage.setItem('amenities_v1', JSON.stringify(S)); }catch(e){} }
-function localLoad(){ try{ const r = localStorage.getItem('amenities_v1'); return r ? JSON.parse(r) : null; }catch(e){ return null; } }
+function migrate(){
+  if(!S.items) S.items = DEFAULT_ITEMS.map(x=>({...x}));
+  if(!S.types || !S.types.junior) S.types = defaultTypes();
+  if(!S.rooms){ S.rooms = defaultRooms(); S.day = Date.now(); }
+  delete S.lists;
+  S.rooms.forEach(r=>{ if(!S.types[r.type]) r.type=typeFor(r.name); r.needs=r.needs||{}; });
+  S.v = 3;
+}
+
+/* ---------- Persistance (db Claude si dispo + secours local) ---------- */
+const LS='amenities_v1';
+function localSave(){ try{ localStorage.setItem(LS, JSON.stringify(S)); }catch(e){} }
+function localLoad(){ try{ const r = localStorage.getItem(LS); return r ? JSON.parse(r) : null; }catch(e){ return null; } }
 function save(){
-  S.updated = Date.now();
-  localSave();
+  S.updated = Date.now(); localSave();
   clearTimeout(saveTimer);
   saveTimer = setTimeout(async ()=>{
     if(!db) return;
-    try{ await db.doc('app/state').set({json: JSON.stringify(S), updated: S.updated}); setSync('✓ Synchronisé'); }
-    catch(e){ setSync('⚠ Sauvegardé sur cet appareil seulement'); }
+    try{ await db.doc('app/state').set({json: JSON.stringify(S), updated: S.updated}); }catch(e){}
   }, 600);
 }
-function setSync(t){ const el=document.getElementById('sync'); if(el) el.textContent=t; window.__sync=t; }
 function unwrap(r){ if(!r) return null; if(typeof r.data==='function') return r.data(); if(r.data && typeof r.data==='object') return r.data; return r; }
 async function pull(){
   if(!db) return;
   try{
     const d = unwrap(await db.doc('app/state').get());
     if(d && d.json){ const remote = JSON.parse(d.json); if((remote.updated||0) > (S.updated||0)){ S = remote; migrate(); localSave(); render(); } }
-    setSync('✓ Synchronisé');
-  }catch(e){ setSync('⚠ Mode hors ligne (cet appareil)'); }
+  }catch(e){}
 }
 async function init(){
-  const l = localLoad(); if(l && l.items) S = l; migrate();
+  const l = localLoad(); if(l) S = l; migrate();
   render();
-  try{
-    if(window.claude && claude.use){
-      const timer = setTimeout(()=>setSync('Mode local (cet appareil)'), 10000);
-      db = await claude.use('db'); clearTimeout(timer);
-      if(db){ await pull(); } else setSync('Mode local (cet appareil)');
-    } else setSync('Mode local (cet appareil)');
-  }catch(e){ setSync('Mode local (cet appareil)'); }
   document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) pull(); });
+  try{ if(window.claude && claude.use){ db = await claude.use('db'); if(db) await pull(); } }catch(e){}
 }
 
 /* ---------- Helpers ---------- */
 const $ = id => document.getElementById(id);
 const esc = s => String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const item = id => S.items.find(i=>i.id===id);
-const curList = () => S.lists.find(l=>l.id===view.listId);
-function label(it,n){ return n>1 ? it.plural||it.short : it.short; }
-function roomSummary(r){
-  return S.items.filter(it=>(r.needs[it.id]||0)>0).map(it=>({it,n:r.needs[it.id]}));
-}
-function totals(list){
-  const t={}; list.rooms.forEach(r=>Object.entries(r.needs).forEach(([k,v])=>{ if(v>0) t[k]=(t[k]||0)+v; }));
-  return S.items.filter(it=>t[it.id]).map(it=>({it,n:t[it.id]}));
-}
-function fmtDate(ts){ return new Date(ts).toLocaleDateString('fr-FR',{weekday:'short',day:'numeric',month:'short'}); }
+const rtype = r => S.types[r.type]||S.types.priv;
+const label = (it,n) => n>1 ? (it.plural||it.short) : it.short;
+const roomSummary = r => S.items.filter(it=>(r.needs[it.id]||0)>0).map(it=>({it,n:r.needs[it.id]}));
+const roomCount = r => Object.values(r.needs).reduce((a,b)=>a+b,0);
+function totals(){ const t={}; S.rooms.forEach(r=>Object.entries(r.needs).forEach(([k,v])=>{ if(v>0) t[k]=(t[k]||0)+v; })); return S.items.filter(it=>t[it.id]).map(it=>({it,n:t[it.id]})); }
+const fmtDate = ts => new Date(ts).toLocaleDateString('fr-FR',{weekday:'short',day:'numeric',month:'short'});
 function toast(t){ const el=$('toast'); el.textContent=t; el.classList.add('on'); clearTimeout(el._t); el._t=setTimeout(()=>el.classList.remove('on'),1600); }
-function ring(p){
-  const c=2*Math.PI*19, o=c*(1-p);
-  return `<svg class="ring" viewBox="0 0 46 46"><circle cx="23" cy="23" r="19" fill="none" stroke="#2c2c31" stroke-width="5"/><circle cx="23" cy="23" r="19" fill="none" stroke="#f2c14e" stroke-width="5" stroke-linecap="round" stroke-dasharray="${c}" stroke-dashoffset="${o}" transform="rotate(-90 23 23)"/><text x="23" y="27" text-anchor="middle" font-size="12" font-weight="700" fill="#f4f4f5">${Math.round(p*100)}%</text></svg>`;
-}
 
-/* ---------- Écrans ---------- */
+/* ---------- Écran unique ---------- */
 function render(){
-  if(view.screen==='list' && !curList()) view.screen='home';
-  if(view.screen==='home') renderHome(); else renderList();
-}
-function renderHome(){
-  const lists=[...S.lists].sort((a,b)=>b.created-a.created);
+  if(cur>=S.rooms.length) cur=0;
+  const r=S.rooms[cur], T=rtype(r), done=S.rooms.filter(x=>x.done).length;
+  const stdTxt = Object.entries(T.std).filter(([k,v])=>v>0&&item(k)).map(([k,v])=>v+' '+label(item(k),v)).join(', ');
   $('app').innerHTML = `
-    <header><h1>Amenities</h1><button class="icon-btn" onclick="openManage()" aria-label="Articles">⚙️</button></header>
-    ${lists.length ? lists.map(l=>{
-      const done=l.rooms.filter(r=>r.done).length, tot=totals(l).reduce((a,x)=>a+x.n,0);
-      return `<button class="list-card" onclick="openList('${l.id}')">${ring(l.rooms.length?done/l.rooms.length:0)}
-        <div style="flex:1;min-width:0"><div class="t">${esc(l.title)}</div><div class="m">${fmtDate(l.created)} · ${done}/${l.rooms.length} chambres · ${tot} article${tot>1?'s':''} à remettre</div></div><span style="color:var(--mute)">›</span></button>`;
-    }).join('') : `<div class="empty">Aucune tournée pour l'instant.<br>Crée-en une pour commencer ✨</div>`}
-    <div class="sync" id="sync">${esc(window.__sync||'')}</div>`;
-  $('dock').innerHTML = `<button class="btn pri" onclick="openNewList()">＋ Nouvelle tournée</button>`;
+    <header style="margin-bottom:6px"><h1>Amenities</h1>
+      <button class="icon-btn" onclick="askReset()" aria-label="Nouvelle journée">↺</button>
+      <button class="icon-btn" onclick="openManage()" aria-label="Réglages">⚙️</button></header>
+    <div class="prog" style="margin-bottom:4px"><div class="bar"><i style="width:${done/S.rooms.length*100}%"></i></div><span>${done}/${S.rooms.length} faites</span></div>
+    <div class="tabs" id="tabs">${S.rooms.map((x,i)=>{ const c=roomCount(x);
+      return `<button class="tab ${i===cur?'on':''} ${x.done?'done':''}" onclick="go(${i})">${c&&!x.done?`<span class="dot">${c}</span>`:''}<b>${esc(x.name)}</b><small>${esc(rtype(x).short)}</small></button>`;}).join('')}</div>
+    <div class="rhead"><h2>Chambre ${esc(r.name)} <span>· ${esc(T.name)}</span></h2></div>
+    ${stdTxt?`<button class="btn ghost" style="width:100%;height:44px;margin-bottom:10px;font-size:14px" onclick="fillStd()">🍽 Toute la dotation manque (${esc(stdTxt)})</button>`:''}
+    <div class="panel">${S.items.map(it=>{ const n=r.needs[it.id]||0, d=T.std[it.id]||0;
+      return `<div class="item ${n?'has':''}" id="it_${it.id}"><span class="e">${it.e||'•'}</span><span class="n">${esc(it.name)}${d?`<small>Dotation : ${d}</small>`:''}</span>
+        <div class="step"><button onclick="bump('${it.id}',-1)">−</button><span class="v">${n}</span><button onclick="bump('${it.id}',1)">＋</button></div></div>`;}).join('')}</div>
+    <label class="l">Note (optionnel)</label><input class="field" placeholder="ex. clim à vérifier" value="${esc(r.note)}" oninput="S.rooms[${cur}].note=this.value;save()">
+    <button class="btn ${r.done?'ghost':''}" style="width:100%;margin-top:14px" onclick="setDone()">${r.done?'↺ Marquer pas faite':'✓ Chambre faite → suivante'}</button>`;
+  $('dock').innerHTML = `<button class="btn pri" onclick="openRecap()">📋 Récap & WhatsApp${totals().length?' ('+totals().reduce((a,x)=>a+x.n,0)+')':''}</button>`;
+  const t=$('tabs').children[cur]; if(t) t.scrollIntoView({inline:'center',block:'nearest'});
 }
-function renderList(){
-  const l=curList(); const done=l.rooms.filter(r=>r.done).length;
-  $('app').innerHTML = `
-    <header><button class="icon-btn" onclick="goHome()" aria-label="Retour">‹</button><h1>${esc(l.title)}</h1><button class="icon-btn" onclick="openListMenu()" aria-label="Options">•••</button></header>
-    <div class="sub">${fmtDate(l.created)}</div>
-    <div class="prog"><div class="bar"><i style="width:${l.rooms.length?done/l.rooms.length*100:0}%"></i></div><span>${done}/${l.rooms.length} faites</span></div>
-    <div class="grid">${l.rooms.map((r,i)=>{
-      const s=roomSummary(r);
-      return `<button class="room ${r.done?'done':''}" onclick="openRoom(${i})">
-        <span class="chk" onclick="event.stopPropagation();toggleDone(${i})">${r.done?'✓':''}</span>
-        <span class="num">${esc(r.name)}<span class="badge t-${r.type}">${esc(rtype(r).short||rtype(r).name)}</span></span>
-        ${s.length?`<span class="chips">${s.map(x=>`<span class="chip">${x.n} ${esc(label(x.it,x.n))}</span>`).join('')}</span>`:`<span class="ok">${r.note?esc(r.note):'Rien à remettre'}</span>`}
-        ${s.length&&r.note?`<span class="ok">📝 ${esc(r.note)}</span>`:''}
-      </button>`;}).join('')}</div>
-    <div class="sync" id="sync">${esc(window.__sync||'')}</div>`;
-  $('dock').innerHTML = `<button class="btn pri" onclick="openRecap()">📋 Récap & envoi</button>`;
+function go(i){ cur=i; render(); window.scrollTo(0,0); }
+function bump(id,d){
+  const r=S.rooms[cur]; const cap=rtype(r).std[id];
+  let n=Math.max(0,(r.needs[id]||0)+d);
+  if(cap && n>cap){ n=cap; toast('Max '+cap+' ('+rtype(r).name+')'); }
+  if(n) r.needs[id]=n; else delete r.needs[id];
+  if(navigator.vibrate) try{navigator.vibrate(8)}catch(e){}
+  save(); render();
 }
-function goHome(){ view={screen:'home',listId:null}; render(); }
-function openList(id){ view={screen:'list',listId:id}; render(); window.scrollTo(0,0); }
+function fillStd(){ const r=S.rooms[cur]; Object.entries(rtype(r).std).forEach(([k,v])=>{ if(v>0) r.needs[k]=v; }); save(); render(); toast('Dotation ajoutée'); }
+function setDone(){
+  const r=S.rooms[cur]; r.done=!r.done; save();
+  if(r.done){ const nx=S.rooms.findIndex((x,i)=>i>cur && !x.done); if(nx>=0) cur=nx; else { const any=S.rooms.findIndex(x=>!x.done); if(any>=0) cur=any; else toast('Toutes les chambres sont faites 🎉'); } window.scrollTo(0,0); }
+  render();
+}
 
 /* ---------- Sheet ---------- */
 function openSheet(hd,bd,ft){ $('sheetHd').innerHTML=hd; $('sheetBd').innerHTML=bd; $('sheetFt').innerHTML=ft||''; $('sheetFt').classList.toggle('hide',!ft); $('scrim').classList.add('on'); $('sheet').classList.add('on'); $('sheetBd').scrollTop=0; }
 function closeSheet(){ $('scrim').classList.remove('on'); $('sheet').classList.remove('on'); render(); }
 $('scrim').onclick=closeSheet;
 
-/* ---------- Nouvelle tournée ---------- */
-function openNewList(){
-  openSheet(`<h2>Nouvelle tournée</h2><button class="icon-btn" onclick="closeSheet()">✕</button>`,
-  `<label class="l">Nom</label><input class="field" id="nTitle" placeholder="ex. Pas 3 et 4, Amenities + Clim…">
-   <label class="l">Chambres</label>
-   <div class="seg"><button class="on" id="mRange" onclick="setMode('range')">De … à …</button><button id="mFree" onclick="setMode('free')">Liste libre</button></div>
-   <div id="rangeBox" class="row2"><div><label class="l">De</label><input class="field" id="nFrom" type="number" inputmode="numeric" value="1"></div><div><label class="l">À</label><input class="field" id="nTo" type="number" inputmode="numeric" value="9"></div></div>
-   <div id="freeBox" class="hide"><label class="l">Numéros séparés par des virgules</label><input class="field" id="nFree" placeholder="101, 102, 105, 204…"></div>`,
-  `<button class="btn pri" onclick="createList()">Créer</button>`);
-  setTimeout(()=>$('nTitle').focus(),250);
+/* ---------- Nouvelle journée ---------- */
+function askReset(){
+  openSheet(`<h2>Nouvelle journée ?</h2><button class="icon-btn" onclick="closeSheet()">✕</button>`,
+   `<p style="color:var(--mute);margin:0 0 6px;line-height:1.5">Remet les 9 chambres à zéro (compteurs, notes et cases « faite »). Pense à envoyer le récap avant.</p>`,
+   `<button class="btn" onclick="closeSheet()">Annuler</button><button class="btn pri" onclick="doReset()">Tout remettre à 0</button>`);
 }
-let newMode='range';
-function setMode(m){ newMode=m; $('mRange').classList.toggle('on',m==='range'); $('mFree').classList.toggle('on',m==='free'); $('rangeBox').classList.toggle('hide',m!=='range'); $('freeBox').classList.toggle('hide',m!=='free'); }
-function createList(){
-  let names=[];
-  if(newMode==='range'){ const a=parseInt($('nFrom').value), b=parseInt($('nTo').value); if(isNaN(a)||isNaN(b)||b<a||b-a>300) return toast('Plage invalide'); for(let i=a;i<=b;i++) names.push(String(i)); }
-  else { names=$('nFree').value.split(/[,;\s]+/).map(s=>s.trim()).filter(Boolean); if(!names.length) return toast('Ajoute au moins une chambre'); }
-  const l={id:uid(), title:$('nTitle').value.trim()||('Tournée du '+fmtDate(Date.now())), created:Date.now(), rooms:names.map(n=>({name:n,type:typeFor(n),needs:{},done:false,note:''}))};
-  S.lists.push(l); save(); newMode='range'; view={screen:'list',listId:l.id}; closeSheet();
-}
-
-/* ---------- Chambre ---------- */
-let roomIdx=null;
-function openRoom(i){
-  roomIdx=i; const r=curList().rooms[i];
-  openSheet(`<h2>Chambre ${esc(r.name)} <span style="font-size:14px;color:var(--mute);font-weight:600">· ${esc(rtype(r).name)}</span></h2><button class="icon-btn" onclick="closeSheet()">✕</button>`, roomBody(r),
-    `<button class="btn ghost" onclick="clearRoom()">Remettre à 0</button><button class="btn pri" id="doneBtn" onclick="toggleDone(${i},true)">${r.done?'↺ Pas fait':'✓ Fait'}</button>`);
-}
-function roomBody(r){
-  const T=rtype(r);
-  return `<div class="seg types" style="margin-bottom:8px">${Object.entries(S.types).map(([k,t])=>`<button class="${r.type===k?'on':''}" onclick="setType('${k}')">${esc(t.short||t.name)}</button>`).join('')}</div>
-    <button class="btn ghost" style="width:100%;height:44px;margin:4px 0 6px;font-size:14px" onclick="fillStd()">🍽 Toute la dotation manque (${Object.entries(T.std).filter(([k,v])=>v>0&&item(k)).map(([k,v])=>v+' '+label(item(k),v)).join(', ')||'—'})</button>`
-  + S.items.map(it=>{ const n=r.needs[it.id]||0, d=T.std[it.id]||0;
-    return `<div class="item ${n?'has':''}" id="it_${it.id}"><span class="e">${it.e||'•'}</span><span class="n">${esc(it.name)}${d?`<small>Dotation ${esc(T.name.toLowerCase())} : ${d}</small>`:''}</span>
-      <div class="step"><button onclick="bump('${it.id}',-1)">−</button><span class="v">${n}</span><button onclick="bump('${it.id}',1)">＋</button></div></div>`;}).join('')
-    + `<label class="l">Note (optionnel)</label><input class="field" id="rNote" placeholder="ex. clim à vérifier" value="${esc(r.note)}" oninput="setNote(this.value)">`;
-}
-function bump(id,d){
-  const r=curList().rooms[roomIdx]; const cap=rtype(r).std[id]; let n=Math.max(0,(r.needs[id]||0)+d); if(cap && n>cap){ n=cap; toast('Max '+cap+' pour une '+rtype(r).name.toLowerCase()); }
-  if(n) r.needs[id]=n; else delete r.needs[id];
-  const row=$('it_'+id); row.classList.toggle('has',!!n); row.querySelector('.v').textContent=n;
-  if(navigator.vibrate) try{navigator.vibrate(8)}catch(e){}
-  save();
-}
-function setType(k){ const r=curList().rooms[roomIdx]; r.type=k; save(); $('sheetBd').innerHTML=roomBody(r); }
-function fillStd(){ const r=curList().rooms[roomIdx]; Object.entries(rtype(r).std).forEach(([k,v])=>{ if(v>0) r.needs[k]=v; }); save(); $('sheetBd').innerHTML=roomBody(r); toast('Dotation ajoutée'); }
-function setNote(v){ curList().rooms[roomIdx].note=v; save(); }
-function clearRoom(){ const r=curList().rooms[roomIdx]; r.needs={}; r.note=''; save(); $('sheetBd').innerHTML=roomBody(r); }
-function toggleDone(i,fromSheet){
-  const r=curList().rooms[i]; r.done=!r.done; save();
-  if(fromSheet) closeSheet(); else render();
-}
-
-/* ---------- Menu tournée ---------- */
-function openListMenu(){
-  const l=curList();
-  openSheet(`<h2>Options</h2><button class="icon-btn" onclick="closeSheet()">✕</button>`,
-  `<label class="l">Nom de la tournée</label><input class="field" value="${esc(l.title)}" oninput="curList().title=this.value;save()">
-   <label class="l">Ajouter une chambre</label><div class="row2" style="align-items:flex-end"><input class="field" id="addRoom" placeholder="ex. 10"><button class="btn" style="flex:0 0 90px;height:48px" onclick="addRoom()">Ajouter</button></div>
-   <div style="display:flex;flex-direction:column;gap:10px;margin-top:22px">
-     <button class="btn ghost" onclick="dupList()">⧉ Dupliquer (mêmes chambres, vide)</button>
-     <button class="btn ghost" onclick="resetList()">↺ Tout remettre à zéro</button>
-     <button class="btn danger" onclick="askDelete()" id="delBtn">🗑 Supprimer la tournée</button>
-   </div>`);
-}
-function addRoom(){ const v=$('addRoom').value.trim(); if(!v) return; curList().rooms.push({name:v,type:typeFor(v),needs:{},done:false,note:''}); save(); $('addRoom').value=''; toast('Chambre '+v+' ajoutée'); }
-function dupList(){ const l=curList(); const n={id:uid(),title:l.title,created:Date.now(),rooms:l.rooms.map(r=>({name:r.name,type:r.type,needs:{},done:false,note:''}))}; S.lists.push(n); save(); view.listId=n.id; closeSheet(); toast('Tournée dupliquée'); }
-function resetList(){ curList().rooms.forEach(r=>{r.needs={};r.done=false;r.note='';}); save(); closeSheet(); toast('Remis à zéro'); }
-function askDelete(){ const b=$('delBtn'); if(b.dataset.c){ S.lists=S.lists.filter(l=>l.id!==view.listId); save(); view={screen:'home',listId:null}; closeSheet(); toast('Supprimée'); } else { b.dataset.c=1; b.textContent='Appuie encore pour confirmer'; } }
+function doReset(){ S.rooms.forEach(r=>{r.needs={};r.done=false;r.note='';}); S.day=Date.now(); cur=0; save(); closeSheet(); toast('Nouvelle journée ✨'); }
 
 /* ---------- Récap ---------- */
-let recapMode='total';
+let recapMode='both';
 function recapText(){
-  const l=curList(), t=totals(l);
-  const lines=[`*${l.title}* – ${fmtDate(l.created)}`,''];
-  if(recapMode!=='rooms'){
-    lines.push('*À remettre :*');
-    if(t.length) t.forEach(x=>lines.push(`• ${x.n} ${label(x.it,x.n)}`)); else lines.push('• Rien 👌');
-    lines.push('');
-  }
-  if(recapMode!=='total'){
-    lines.push('*Par chambre :*');
-    l.rooms.forEach(r=>{ const s=roomSummary(r); if(!s.length && !r.note) return;
-      lines.push(`• ${r.name} : ${s.map(x=>x.n+' '+label(x.it,x.n)).join(', ')}${r.note?(s.length?' — ':'')+r.note:''}${r.done?' ✅':''}`); });
-    lines.push('');
-  }
-  const done=l.rooms.filter(r=>r.done).length; lines.push(`${done}/${l.rooms.length} chambres faites`);
+  const t=totals(); const lines=[`*Amenities* – ${fmtDate(Date.now())}`,''];
+  if(recapMode!=='rooms'){ lines.push('*À remettre :*'); if(t.length) t.forEach(x=>lines.push(`• ${x.n} ${label(x.it,x.n)}`)); else lines.push('• Rien 👌'); lines.push(''); }
+  if(recapMode!=='total'){ lines.push('*Par chambre :*');
+    S.rooms.forEach(r=>{ const s=roomSummary(r); if(!s.length && !r.note) return;
+      lines.push(`• ${r.name} : ${s.map(x=>x.n+' '+label(x.it,x.n)).join(', ')}${r.note?(s.length?' — ':'')+r.note:''}`); });
+    lines.push(''); }
+  lines.push(`${S.rooms.filter(r=>r.done).length}/${S.rooms.length} chambres faites`);
   return lines.join('\n');
 }
 function openRecap(){
-  const t=totals(curList());
+  const t=totals();
   openSheet(`<h2>Récap</h2><button class="icon-btn" onclick="closeSheet()">✕</button>`,
    `<div class="sec">Total à prévoir</div>
     ${t.length?`<div class="tot">${t.map(x=>`<div><span style="font-size:22px">${x.it.e||''}</span><b>${x.n}</b><span>${esc(label(x.it,x.n))}</span></div>`).join('')}</div>`:`<div class="empty" style="padding:16px">Rien à remettre pour l'instant 👌</div>`}
@@ -354,30 +283,29 @@ function openRecap(){
   setRecap(recapMode);
 }
 function setRecap(m){ recapMode=m; document.querySelectorAll('[data-m]').forEach(b=>b.classList.toggle('on',b.dataset.m===m)); const txt=recapText(); $('msg').textContent=txt; $('waBtn').href='https://wa.me/?text='+encodeURIComponent(txt); }
-async function copyMsg(){ try{ await navigator.clipboard.writeText(recapText()); toast('Copié ✓'); }catch(e){ const r=document.createRange(); r.selectNodeContents($('msg')); const s=getSelection(); s.removeAllRanges(); s.addRange(r); toast('Sélectionné, fais Copier'); } }
+async function copyMsg(){ try{ await navigator.clipboard.writeText(recapText()); toast('Copié ✓'); }catch(e){ const rg=document.createRange(); rg.selectNodeContents($('msg')); const s=getSelection(); s.removeAllRanges(); s.addRange(rg); toast('Sélectionné, fais Copier'); } }
 
-/* ---------- Gérer les articles ---------- */
-function openManage(){
-  openSheet(`<h2>Articles</h2><button class="icon-btn" onclick="closeSheet()">✕</button>`, manageBody(),
-   `<button class="btn" onclick="resetItems()">Liste par défaut</button><button class="btn pri" onclick="closeSheet()">OK</button>`);
-}
+/* ---------- Réglages : articles & dotations ---------- */
+function openManage(){ openSheet(`<h2>Réglages</h2><button class="icon-btn" onclick="closeSheet()">✕</button>`, manageBody(),
+  `<button class="btn" onclick="resetItems()">Par défaut</button><button class="btn pri" onclick="closeSheet()">OK</button>`); }
 function manageBody(){
-  return `<div class="manage">${S.items.map((it,i)=>`<div class="item">
+  return `<div class="sec" style="margin-top:0">Articles</div><div class="manage">${S.items.map((it,i)=>`<div class="item">
      <input class="e" style="background:transparent;border:0;width:36px;font-size:22px;text-align:center" value="${esc(it.e||'')}" oninput="S.items[${i}].e=this.value;save()">
      <span class="n"><input value="${esc(it.name)}" oninput="S.items[${i}].name=this.value;save()"><small>Message : <input style="display:inline;width:60%;font-size:12px;color:var(--mute);font-weight:500" value="${esc(it.short)}" oninput="S.items[${i}].short=this.value;S.items[${i}].plural=this.value;save()"></small></span>
      <button class="del" onclick="moveItem(${i},-1)" style="color:var(--mute)">↑</button>
      <button class="del" onclick="delItem(${i})">✕</button></div>`).join('')}</div>
+   <div class="row2" style="align-items:flex-end"><input class="field" id="newIt" placeholder="Ajouter un article (ex. gel douche)"><button class="btn" style="flex:0 0 90px;height:48px" onclick="addItem()">Ajouter</button></div>
    <div class="sec">Dotation par type de chambre</div>
-   <div class="item" style="font-size:12px;color:var(--mute);font-weight:700"><span class="e"></span><span class="n"></span>${Object.values(S.types).map(t=>`<span style="width:50px;text-align:center;font-size:10.5px">${esc(t.short||t.name)}</span>`).join('')}</div>
+   <div class="item" style="font-size:12px;color:var(--mute);font-weight:700"><span class="e"></span><span class="n"></span>${Object.values(S.types).map(t=>`<span style="width:50px;text-align:center;font-size:10.5px">${esc(t.short)}</span>`).join('')}</div>
    ${S.items.map(it=>`<div class="item"><span class="e">${it.e||'•'}</span><span class="n">${esc(it.name)}</span>${Object.keys(S.types).map(k=>`<input type="number" inputmode="numeric" min="0" class="field" style="width:50px;margin:0;padding:8px 2px;text-align:center" value="${S.types[k].std[it.id]||''}" placeholder="–" oninput="setStd('${k}','${it.id}',this.value)">`).join('')}</div>`).join('')}
-   <label class="l">Ajouter un article</label>
-   <div class="row2" style="align-items:flex-end"><input class="field" id="newIt" placeholder="ex. Gel douche"><button class="btn" style="flex:0 0 90px;height:48px" onclick="addItem()">Ajouter</button></div>`;
+   <div class="sec">Type de chaque chambre</div>
+   ${S.rooms.map((r,i)=>`<div class="item"><span class="n">Chambre ${esc(r.name)}</span><select class="field" style="width:auto;margin:0;padding:8px 10px" onchange="S.rooms[${i}].type=this.value;save()">${Object.entries(S.types).map(([k,t])=>`<option value="${k}" ${r.type===k?'selected':''}>${esc(t.name)}</option>`).join('')}</select></div>`).join('')}`;
 }
 function setStd(k,id,v){ const n=parseInt(v); if(n>0) S.types[k].std[id]=n; else delete S.types[k].std[id]; save(); }
-function addItem(){ const v=$('newIt').value.trim(); if(!v) return; S.items.push({id:uid(),name:v,short:v.toLowerCase(),plural:v.toLowerCase(),e:'•'}); save(); $('sheetBd').innerHTML=manageBody(); }
+function addItem(){ const v=$('newIt').value.trim(); if(!v) return; S.items.push({id:Math.random().toString(36).slice(2,9),name:v,short:v.toLowerCase(),plural:v.toLowerCase(),e:'•'}); save(); $('sheetBd').innerHTML=manageBody(); }
 function delItem(i){ S.items.splice(i,1); save(); $('sheetBd').innerHTML=manageBody(); }
 function moveItem(i,d){ const j=i+d; if(j<0) return; [S.items[i],S.items[j]]=[S.items[j],S.items[i]]; save(); $('sheetBd').innerHTML=manageBody(); }
-function resetItems(){ S.items=DEFAULT_ITEMS.map(x=>({...x})); S.types=defaultTypes(); save(); $('sheetBd').innerHTML=manageBody(); toast('Liste réinitialisée'); }
+function resetItems(){ S.items=DEFAULT_ITEMS.map(x=>({...x})); S.types=defaultTypes(); S.rooms.forEach(r=>r.type=typeFor(r.name)); save(); $('sheetBd').innerHTML=manageBody(); toast('Réglages par défaut'); }
 
 try{ init(); }catch(e){ document.getElementById('app').innerHTML='<p style="padding:20px">Erreur : '+e.message+'</p>'; }
 </script>
