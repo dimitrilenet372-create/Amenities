@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>Amenities</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -122,6 +122,9 @@ label.l{display:block;font-size:13px;color:var(--mute);margin:14px 0 0;font-weig
 .panel{background:var(--card);border-radius:var(--r);padding:4px 14px}
 .panel .step{background:var(--card2)}
 select.field{color:var(--txt);-webkit-appearance:none;appearance:none}
+html,body,button,a,.room,.tab,.step,.item{touch-action:manipulation}
+button,.room,.step,.chk{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+input,select,textarea{font-size:16px!important}
 </style>
 </head>
 <body>
@@ -323,6 +326,8 @@ function delItem(i){ S.items.splice(i,1); save(); $('sheetBd').innerHTML=manageB
 function moveItem(i,d){ const j=i+d; if(j<0) return; [S.items[i],S.items[j]]=[S.items[j],S.items[i]]; save(); $('sheetBd').innerHTML=manageBody(); }
 function resetItems(){ S.items=DEFAULT_ITEMS.map(x=>({...x})); S.types=defaultTypes(); S.rooms.forEach(r=>r.type=typeFor(r.name)); save(); $('sheetBd').innerHTML=manageBody(); toast('Réglages par défaut'); }
 
+document.addEventListener('dblclick',e=>e.preventDefault(),{passive:false});
+document.addEventListener('gesturestart',e=>e.preventDefault());
 try{ init(); }catch(e){ document.getElementById('app').innerHTML='<p style="padding:20px">Erreur : '+e.message+'</p>'; }
 </script>
 </body>
